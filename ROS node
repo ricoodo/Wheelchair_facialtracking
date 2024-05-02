@@ -1,0 +1,62 @@
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+import serial
+
+class ArduinoControlNode(Node):
+    def __init__(self):
+        super().__init__('arduino_control_node')
+        self.serial_port = '/dev/ttyUSB0'  # Change this to your Arduino's serial port
+        self.serial_baudrate = 115200      # Change this to match Arduino's baudrate
+        self.serial_timeout = 1            # Adjust timeout as needed
+        self.serial_connection = serial.Serial(self.serial_port, self.serial_baudrate, timeout=self.serial_timeout)
+        self.subscription = self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
+        self.last_linear_x = 0.0
+        self.last_angular_z = 0.0
+
+    def cmd_vel_callback(self, msg):
+        # Process twist command received from ROS
+        linear_x = msg.linear.x  # Linear velocity along the x-axis
+        angular_z = msg.angular.z  # Angular velocity about the z-axis
+
+        # Determine target speeds based on keyboard input
+        if linear_x > 0:
+            # Forward motion
+            target_speed_1 = 0.5
+            target_speed_2 = 0.5
+        elif linear_x < 0:
+            # Backward motion
+            target_speed_1 = -0.5
+            target_speed_2 = -0.5
+        elif angular_z > 0:
+            # Right turn
+            target_speed_1 = 0.5
+            target_speed_2 = -0.5
+        elif angular_z < 0:
+            # Left turn
+            target_speed_1 = -0.5
+            target_speed_2 = 0.5
+        else:
+            # Stop
+            target_speed_1 = 0
+            target_speed_2 = 0
+
+        # Convert target speeds to motor commands
+        linear_change = linear_x - self.last_linear_x
+        angular_change = angular_z - self.last_angular_z
+        motor_command = f"{target_speed_1 + linear_change},{target_speed_2 + angular_change}\n"
+        self.serial_connection.write(motor_command.encode())
+
+        # Update last velocities
+        self.last_linear_x = linear_x
+        self.last_angular_z = angular_z
+
+def main(args=None):
+    rclpy.init(args=args)
+    arduino_control_node = ArduinoControlNode()
+    rclpy.spin(arduino_control_node)
+    arduino_control_node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
