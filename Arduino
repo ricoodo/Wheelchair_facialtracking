@@ -1,0 +1,129 @@
+#include <Arduino.h>
+
+// Constants
+const double WHEEL_CIRCUMFERENCE_M = 0.56515; // Motor wheel circumference (meters)
+const int MAX_PWM_VALUE = 255;               // Maximum PWM value
+const double ACCELERATION_RATE = 0.1;        // Acceleration rate (m/s^2)
+const double DECELERATION_RATE = 0.2;        // Deceleration rate (m/s^2)
+
+// PID constants
+double Kp = 3;  // Proportional gain
+double Ki = 2;  // Integral gain
+double Kd = 0.5; // Derivative gain
+
+// Pin Declarations
+const int PIN_DIR1 = 45;   // Motor 1 direction signal
+const int PIN_PWM1 = 3;    // PWM motor 1 speed control
+
+const int PIN_DIR2 = 49;   // Motor 2 direction signal
+const int PIN_PWM2 = 5;    // PWM motor 2 speed control
+
+// Speed variables
+double target_speed_1 = 0;  // Desired speed for motor 1
+double target_speed_2 = 0;  // Desired speed for motor 2
+double actual_speed_1 = 0;  // Measured speed for motor 1
+double actual_speed_2 = 0;  // Measured speed for motor 2
+
+unsigned long lastMillis_1 = 0;
+unsigned long lastMillis_2 = 0;
+double last_error_1 = 0;
+double last_error_2 = 0;
+
+// Last state variable declaration
+bool lastState = false;
+
+void setup() {
+  // Set pin directions for motor 1
+  pinMode(PIN_PWM1, OUTPUT);
+  pinMode(PIN_DIR1, OUTPUT);
+
+  // Set pin directions for motor 2
+  pinMode(PIN_PWM2, OUTPUT);
+  pinMode(PIN_DIR2, OUTPUT);
+
+  // Initialize Serial communication
+  Serial.begin(115200);
+}
+
+void loop() {
+  // Read serial input
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    // Parse command and set target speeds
+    // Format of command: "linear_x,angular_z"
+    double linear_x = command.substring(0, command.indexOf(',')).toFloat();
+    double angular_z = command.substring(command.indexOf(',') + 1).toFloat();
+    // Convert linear and angular velocities to motor speeds
+    target_speed_1 = linear_x + angular_z;
+    target_speed_2 = linear_x - angular_z;
+  }
+
+  // Read the speed from input pin for motor 1
+  actual_speed_1 = readSpeed(PIN_DIR1, actual_speed_1, lastMillis_1);
+
+  // Read the speed from input pin for motor 2
+  actual_speed_2 = readSpeed(PIN_DIR2, actual_speed_2, lastMillis_2);
+
+  // Compute PID control for motor 1
+  double error_1 = target_speed_1 - actual_speed_1;
+  double output_1 = Kp * error_1 + Ki * error_1 * (millis() - lastMillis_1) / 1000 + Kd * (error_1 - last_error_1) / ((millis() - lastMillis_1) / 1000);
+  last_error_1 = error_1;
+  lastMillis_1 = millis();
+
+  // Apply acceleration and deceleration
+  output_1 = applyAccelerationDeceleration(target_speed_1, actual_speed_1, output_1);
+
+  // Apply control signal to motor 1
+  int pwm_value_1 = map(abs(output_1), 0, 1, 0, MAX_PWM_VALUE);
+  digitalWrite(PIN_DIR1, output_1 >= 0 ? LOW : HIGH);
+  analogWrite(PIN_PWM1, pwm_value_1);
+
+  // Compute PID control for motor 2
+  double error_2 = target_speed_2 - actual_speed_2;
+  double output_2 = Kp * error_2 + Ki * error_2 * (millis() - lastMillis_2) / 1000 + Kd * (error_2 - last_error_2) / ((millis() - lastMillis_2) / 1000);
+  last_error_2 = error_2;
+  lastMillis_2 = millis();
+
+  // Apply acceleration and deceleration
+  output_2 = applyAccelerationDeceleration(target_speed_2, actual_speed_2, output_2);
+
+  // Apply control signal to motor 2
+  int pwm_value_2 = map(abs(output_2), 0, 1, 0, MAX_PWM_VALUE);
+  digitalWrite(PIN_DIR2, output_2 >= 0 ? LOW : HIGH);
+  analogWrite(PIN_PWM2, pwm_value_2);
+}
+
+double readSpeed(int pin, double actual_speed, unsigned long& lastMillis) {
+  // Read the current state of the input pin
+  bool state = digitalRead(pin);
+
+  // Check if the pin has changed state
+  if (state != lastState)
+  {
+    // Calculate how long has passed since last transition
+    unsigned long currentMillis = millis();
+    unsigned long elapsedMillis = currentMillis - lastMillis;
+
+    // Calculate the frequency of the input signal
+    double period = elapsedMillis * 2.0;
+    double frequency = (1 / period) * 1000;
+
+    // Calculate the actual speed
+    actual_speed = WHEEL_CIRCUMFERENCE_M * frequency;
+
+    // Save the last state
+    lastState = state;
+    lastMillis = currentMillis;
+  }
+
+  return actual_speed;
+}
+
+double applyAccelerationDeceleration(double target_speed, double actual_speed, double output) {
+  double rate = target_speed >= actual_speed ? ACCELERATION_RATE : DECELERATION_RATE;
+  if (abs(target_speed - actual_speed) < rate) {
+    return target_speed;
+  } else {
+    return actual_speed + rate * (target_speed >= actual_speed ? 1 : -1);
+  }
+}
