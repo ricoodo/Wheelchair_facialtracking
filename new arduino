@@ -51,8 +51,8 @@ void loop() {
     String command = Serial.readStringUntil('\n');
     // Parse command and set target speeds
     // Format of command: "target_speed_1,target_speed_2"
-    double target_speed_1 = command.substring(0, command.indexOf(',')).toFloat();
-    double target_speed_2 = command.substring(command.indexOf(',') + 1).toFloat();
+    target_speed_1 = command.substring(0, command.indexOf(',')).toFloat();
+    target_speed_2 = command.substring(command.indexOf(',') + 1).toFloat();
   }
 
   // Read the speed from input pin for motor 1
