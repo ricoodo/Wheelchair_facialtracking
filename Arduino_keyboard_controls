@@ -1,0 +1,204 @@
+#include <Arduino.h>
+
+// Constants
+const double WHEEL_CIRCUMFERENCE_M = 0.56515; // Motor wheel circumference (meters)
+const int MAX_PWM_VALUE = 255;               // Maximum PWM value
+const unsigned long SPEED_TIMEOUT = 500000;
+
+// PID constants
+double Kp = 3;  // Proportional gain
+double Ki = 2;  // Integral gain
+double Kd = 0.5; // Derivative gain
+
+// Pin Declarations
+const int PIN_DIR1 = 45;   // Motor 1 direction signal
+const int PIN_BRAKE1 = 47;    // Motor brake signal (active low)
+const int PIN_PWM1 = 3;    // PWM motor 1 speed control
+const int PIN_SPEED1 = 6;    // SC Speed Pulse Output from RioRand board
+
+const int PIN_DIR2 = 49;   // Motor 2 direction signal
+const int PIN_BRAKE2 = 51;   // Motor brake signal (active low)
+const int PIN_PWM2 = 5;    // PWM motor 2 speed control
+const int PIN_SPEED2 = 23;   // SC Speed Pulse Output from RioRand board
+
+// Speed variables
+double target_speed_1 = 0;  // Desired speed for motor 1
+double target_speed_2 = 0;  // Desired speed for motor 2
+double actual_speed_1 = 0;  // Measured speed for motor 1
+double actual_speed_2 = 0;  // Measured speed for motor 2
+
+unsigned long last_uS1 = 0;
+unsigned long last_uS2 = 0;
+double last_error1 = 0;
+double last_error2 = 0;
+
+double output_1 = 0;
+double output_2 = 0;
+
+// Last state variable declaration
+bool lastState = false;
+
+void setup() {
+  // Set pin directions for motor 1
+  pinMode(PIN_SPEED1, INPUT);
+  pinMode(PIN_PWM1, OUTPUT);
+  pinMode(PIN_BRAKE1, OUTPUT);
+  pinMode(PIN_DIR1, OUTPUT);
+
+  // Set pin directions for motor 2
+  pinMode(PIN_SPEED2, INPUT);
+  pinMode(PIN_PWM2, OUTPUT);
+  pinMode(PIN_BRAKE2, OUTPUT);
+  pinMode(PIN_DIR2, OUTPUT);
+
+  // Set initial pin states
+  digitalWrite(PIN_BRAKE1, false);
+  digitalWrite(PIN_DIR1, false);
+  analogWrite(PIN_PWM1, 0);
+    
+  digitalWrite(PIN_BRAKE2, false);
+  digitalWrite(PIN_DIR2, true);
+  analogWrite(PIN_PWM2, 0);
+
+  // Initialize Serial communication
+  Serial.begin(115200);
+}
+
+void loop() {
+  // Read serial input
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    
+    //Serial.print("Received command: ");
+    //Serial.println(command);
+    
+    // Parse command and set target speeds
+    // Format of command: "target_speed_1,target_speed_2"
+    target_speed_1 = command.substring(0, command.indexOf(',')).toFloat();
+    target_speed_2 = command.substring(command.indexOf(',') + 1).toFloat();
+    
+//    Serial.print("Target speed 1: ");
+//    Serial.println(target_speed_1);
+//    Serial.print("Target speed 2: ");
+//    Serial.println(target_speed_2);
+    
+  }
+
+  // Read the speed from input pin for motor 1 & 2
+    ReadSpeed1();
+    ReadSpeed2();
+
+//      Serial.print("Actual speed 1: ");
+//      Serial.println(actual_speed_1);
+//      Serial.print("Actual speed 2: ");
+//      Serial.println(actual_speed_2);
+
+  // Compute PID control for motor 1
+  double error1 = target_speed_1 * 10 - actual_speed_1;
+  
+  double output_1 = Kp * error1 + Ki * error1 * (micros() - last_uS1) / 1E6 + Kd * (error1 - last_error1) / ((micros() - last_uS1) / 1E6);
+  
+  last_error1 = error1;
+  last_uS1 = micros();
+
+  // Apply control signal to motor 1
+  int pwm_value_1 = map(abs(output_1), 0, 1, 0, MAX_PWM_VALUE);
+  digitalWrite(PIN_DIR1, output_1 <= 0 ? LOW : HIGH);
+  analogWrite(PIN_PWM1, pwm_value_1);
+
+  // Compute PID control for motor 2
+  double error2 = target_speed_2 * 10 - actual_speed_2;
+  
+  double output_2 = Kp * error2 + Ki * error2 * (micros() - last_uS2) / 1E6 + Kd * (error2 - last_error2) / ((micros() - last_uS2) / 1e6);
+  
+  last_error2 = error2;
+  last_uS2 = micros();
+
+  // Apply control signal to motor 2
+  int pwm_value_2 = map(abs(output_2), 0, 1, 0, MAX_PWM_VALUE);
+  digitalWrite(PIN_DIR2, output_2 >= 0 ? LOW : HIGH);
+  analogWrite(PIN_PWM2, pwm_value_2);
+  
+  
+  //delay(500);
+}
+
+void ReadSpeed1() {
+  
+  static bool lastState1 = false;    // Saves the last state of the speed pin
+  static unsigned long last_uS1;     // The time (µs) when the speed pin changes
+  static unsigned long timeout_uS1;  // Timer used to determine the wheel is not spinning
+    
+  // Read the current state of the input pin
+  bool state1 = digitalRead(PIN_SPEED1);
+
+  // Check if the pin has changed state
+  if (state1 != lastState1)
+  {
+    // Calculate how long has passed since last transition
+    unsigned long current_uS1 = micros();
+    unsigned long elapsed_uS1 = current_uS1 - last_uS1;
+
+    // Calculate the frequency of the input signal
+    double period1 = elapsed_uS1 * 2.0;
+    double frequency1 = 1.0 / period1 * 1E6;
+
+    // If frequency is excesively high, then ignore it
+    if (frequency1 > 3000) frequency1 = 0;
+    
+    // Calculate the actual speed
+    double actual_speed_1 = WHEEL_CIRCUMFERENCE_M * frequency1;
+
+    if (actual_speed_1 > 50) actual_speed_1 = 0;
+
+    // Save the last state and next timeout time
+    last_uS1 = current_uS1;
+    timeout_uS1 = last_uS1 + SPEED_TIMEOUT;
+    lastState1 = state1;
+  }
+  else if (micros() > timeout_uS1)
+  {
+      actual_speed_1 = 0;
+      last_uS1 = micros(); 
+  }
+}
+
+void ReadSpeed2() {
+  
+  static bool lastState2 = false;    // Saves the last state of the speed pin
+  static unsigned long last_uS2;     // The time (µs) when the speed pin changes
+  static unsigned long timeout_uS2;  // Timer used to determine the wheel is not spinning
+    
+  // Read the current state of the input pin
+  bool state2 = digitalRead(PIN_SPEED2);
+
+  // Check if the pin has changed state
+  if (state2 != lastState2)
+  {
+    // Calculate how long has passed since last transition
+    unsigned long current_uS2 = micros();
+    unsigned long elapsed_uS2 = current_uS2 - last_uS2;
+
+    // Calculate the frequency of the input signal
+    double period2 = elapsed_uS2 * 2.0;
+    double frequency2 = 1.0 / period2 * 1E6;
+
+    // If frequency is excesively high, then ignore it
+    if (frequency2 > 3000) frequency2 = 0;
+    
+    // Calculate the actual speed
+    double actual_speed_2 = WHEEL_CIRCUMFERENCE_M * frequency2;
+
+    if (actual_speed_2 > 50) actual_speed_2 = 0;
+
+    // Save the last state and next timeout time
+    last_uS2 = current_uS2;
+    timeout_uS2 = last_uS2 + SPEED_TIMEOUT;
+    lastState2 = state2;
+  }  
+  else if (micros() > timeout_uS2)
+  {
+      actual_speed_2 = 0;
+      last_uS2 = micros();      
+  }
+}
